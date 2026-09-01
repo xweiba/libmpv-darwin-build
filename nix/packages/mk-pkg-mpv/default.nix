@@ -47,6 +47,7 @@ let
 
     cd $src
     patch -p1 <${../../../patches/mpv-fix-missing-objc.patch}
+    patch -p1 <${../../../patches/mpv-nested-stream-callback.patch}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}
     fi
