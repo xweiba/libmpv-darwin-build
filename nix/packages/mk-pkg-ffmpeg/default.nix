@@ -48,6 +48,7 @@ let
     patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
     patch -p1 <${../../../patches/ffmpeg-hls-kazumi-combined.patch}
     patch -p1 <${../../../patches/ffmpeg-segmented-custom-io.patch}
+    patch -p1 <${../../../patches/ffmpeg-segmented-io-cancel.patch}
     cd -
 
     cp ${./meson.build} $src/meson.build
