@@ -13,6 +13,10 @@ on:
         description: "Log level"
         required: true
         default: "warning"
+      target:
+        description: "Nix build target"
+        required: true
+        default: "mk-out-archive-xcframeworks-macos-universal-video-default"
 
 jobs:
   ci:
@@ -66,25 +70,27 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo ${VERSION}
 
-      - name: Build
+      - name: Build selected target
+        id: build
+        env:
+          BUILD_TARGET: ${{ inputs.target || 'mk-out-archive-xcframeworks-macos-universal-video-default' }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
+          TARGET="$BUILD_TARGET"
           echo \"$VERSION\" > nix/utils/default/version.nix
-          nix build -v
+          echo "target=${TARGET}" >> $GITHUB_OUTPUT
+          nix build -v ".#${TARGET}" --out-link result-target
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
+          name: ${{ steps.build.outputs.target }}
           if-no-files-found: error
-          path: |
-            result/*.tar.gz
-            result/*.zip
+          path: result-target/*.zip
 
       - name: Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           fail_on_unmatched_files: true
-          files: |
-            result/*.tar.gz
-            result/*.zip
+          files: result-target/*.zip
