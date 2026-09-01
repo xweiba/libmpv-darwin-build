@@ -47,6 +47,7 @@ let
     patch -p1 <${../../../patches/ffmpeg-fix-ios-hdr-texture.patch}
     patch -p1 <${../../../patches/ffmpeg-fix-dash-base-url-escape.patch}
     patch -p1 <${../../../patches/ffmpeg-hls-kazumi-combined.patch}
+    patch -p1 <${../../../patches/ffmpeg-segmented-custom-io.patch}
     cd -
 
     cp ${./meson.build} $src/meson.build
