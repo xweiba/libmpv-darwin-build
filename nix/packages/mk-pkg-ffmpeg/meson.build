@@ -66,6 +66,10 @@ audio_common_options = [
 ]
 
 video_common_options = [
+    # Finite cached excerpts retain original audio without enabling encoders.
+    '--enable-muxer=mp4',
+    '--enable-muxer=mov',
+    '--enable-bsf=aac_adtstoasc',
     '--enable-neon', # improve hevc (h265) support on arm
     '--enable-libxml2', # dash support
     '--enable-videotoolbox',

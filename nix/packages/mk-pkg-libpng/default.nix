@@ -39,6 +39,10 @@ let
         unzip ${libpngPatch} -d libpng-patch
         rsync -a libpng-patch/libpng-*/ $src/
 
+        # 新版 macOS SDK 已移除 Carbon fp.h，标准 math.h 提供同等浮点声明。
+        substituteInPlace $src/pngpriv.h \
+          --replace-fail '#      include <fp.h>' '#      include <math.h>'
+
         cp -r $src $out
       '';
 in

@@ -25,11 +25,18 @@ let
     name = "${pname}-source-${version}";
     inherit (packageLock) url sha256;
   };
-  patchedSource = callPackage ../../utils/patch-shebangs/default.nix {
+  shebangSource = callPackage ../../utils/patch-shebangs/default.nix {
     name = "${pname}-patched-source-${version}";
     inherit src;
     inherit nativeBuildInputs;
   };
+  patchedSource = pkgs.runCommand "${pname}-xcode-source-${version}" { } ''
+    cp -r ${shebangSource} src
+    chmod -R 777 src
+    substituteInPlace src/src/OT/glyf/VarCompositeGlyph.hh \
+      --replace-fail 'sincosf (rotation, &s, &c);' '__sincosf (rotation, &s, &c);'
+    cp -r src $out
+  '';
 in
 
 pkgs.stdenvNoCC.mkDerivation {

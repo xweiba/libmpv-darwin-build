@@ -1,5 +1,23 @@
 # Downstream patches
 
+## Cached Live Photo excerpts (0.6.8-mediaio.3)
+
+The default video flavor enables only the MP4/MOV muxers and the AAC ADTS
+conversion bitstream filter. This lets mpv `dump-cache` preserve the original
+audio and video for finite Live Photo exports without enabling general encoders
+or the GPL flavor. Photos pairing and H.264/AAC encoding remain native app work.
+
+The iOS artifact contains device arm64 and simulator arm64/x86_64 slices.
+Both CocoaPods archive and Swift Package binary checksums must be updated
+together in the consuming media-kit fork. Verify an actual cache excerpt has
+both audio and video before accepting a release; successful playback alone
+does not verify muxer availability. Remove these downstream flags when the
+upstream default video flavor provides the same finite-export capabilities.
+
+Local Xcode 26 builds also require the libpng standard `math.h` include and
+Apple's `__sincosf` declaration for HarfBuzz. The local Xcode store hash is a
+machine build input, not a portable change to the CI Xcode 16.1 configuration.
+
 This fork follows `Predidit/libmpv-darwin-build` and retains its pinned
 FFmpeg 6.0 and mpv 0.36.0 sources.
 
