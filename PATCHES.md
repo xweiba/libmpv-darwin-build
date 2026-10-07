@@ -44,3 +44,13 @@ callback I/O, then checks full duration, three generation-advancing seeks,
 cache growth, a 10-minute continuous playback window, and bounded dispose. The
 patches can be removed when both behaviors are available in released upstream
 FFmpeg and mpv builds used by media-kit.
+
+## Music analysis filters
+
+Every FFmpeg flavor and audio/video variant enables astats, aresample, aformat,
+anull, asplit, pan, bandpass and amerge. The host uses a stereo-preserving
+analysis sidechain; removing the filters silently makes visualizers unavailable.
+Release CI builds both iOS and macOS universal video archives, including the
+combined tar.gz consumed by CocoaPods and per-framework SwiftPM zip artifacts.
+Configuration checks are not device acceptance: require filter enumeration and
+stereo-sidechain playback against each packaged native library before adoption.

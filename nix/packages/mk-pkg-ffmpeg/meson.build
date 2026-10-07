@@ -304,7 +304,21 @@ video_encodersgpl_options = [
 # disable all option
 options = disable_all_options
 
+# Music analysis is required by every flavor and both audio/video variants.
+# Keep the original stereo channels unchanged after the analysis sidechain.
+audio_analysis_options = [
+    '--enable-filter=astats',
+    '--enable-filter=aresample',
+    '--enable-filter=aformat',
+    '--enable-filter=anull',
+    '--enable-filter=asplit',
+    '--enable-filter=pan',
+    '--enable-filter=bandpass',
+    '--enable-filter=amerge',
+]
+
 # common
+options += audio_analysis_options
 options += common_options
 options += audio_common_options
 if variant == 'video'
