@@ -47,6 +47,14 @@ FFmpeg and mpv builds used by media-kit.
 
 ## Music analysis filters
 
+The filter metadata key-type patch backports the upstream command.c condition
+that fetches metadata for nested GET_TYPE requests. In mpv 0.36, querying
+`af-metadata/ppviz/lavfi.astats.3.RMS_level` as a string first resolves its type;
+the old condition skipped loading tags, then dereferenced NULL in tag_property.
+Two device crash reports identified mp_tags_get_bstr as the faulting frame.
+Keep root filter GET_TYPE behavior unchanged. Remove this backport when the
+selected mpv version already includes the `remaining || GET_TYPE` guard.
+
 Every FFmpeg flavor and audio/video variant enables astats, aresample, aformat,
 anull, asplit, pan, bandpass and amerge. The host uses a stereo-preserving
 analysis sidechain; removing the filters silently makes visualizers unavailable.
