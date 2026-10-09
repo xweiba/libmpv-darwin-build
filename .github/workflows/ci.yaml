@@ -22,6 +22,12 @@ jobs:
   ci:
     name: ci
     # https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'mk-out-archive-xcframeworks-macos-universal-video-default' }}
+          - ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'mk-out-archive-xcframeworks-ios-universal-video-default' }}
     runs-on: macos-15
     permissions:
       contents: write
@@ -73,7 +79,7 @@ jobs:
       - name: Build selected target
         id: build
         env:
-          BUILD_TARGET: ${{ inputs.target || 'mk-out-archive-xcframeworks-macos-universal-video-default' }}
+          BUILD_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || matrix.target }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
           TARGET="$BUILD_TARGET"
@@ -86,11 +92,15 @@ jobs:
         with:
           name: ${{ steps.build.outputs.target }}
           if-no-files-found: error
-          path: result-target/*.zip
+          path: |
+            result-target/*.zip
+            result-target/*.tar.gz
 
       - name: Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           fail_on_unmatched_files: true
-          files: result-target/*.zip
+          files: |
+            result-target/*.zip
+            result-target/*.tar.gz
