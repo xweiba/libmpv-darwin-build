@@ -62,3 +62,14 @@ Release CI builds both iOS and macOS universal video archives, including the
 combined tar.gz consumed by CocoaPods and per-framework SwiftPM zip artifacts.
 Configuration checks are not device acceptance: require filter enumeration and
 stereo-sidechain playback against each packaged native library before adoption.
+
+## iOS embedded video output (avfoundation_embed)
+
+- `mpv-vo-avfoundation-embed.patch` adds `--vo=avfoundation_embed`, the iOS
+  counterpart of Android's `mediacodec_embed`. `--wid` is an
+  `AVSampleBufferDisplayLayer *` owned by the host; VideoToolbox frames are
+  wrapped as display-immediately sample buffers and composited by the system
+  without mpv's GL pass or a Flutter texture. NV12/yuv420p software frames are
+  copied into a CVPixelBuffer pool (CPU only). OSD and subtitles are not drawn:
+  the host switches back to `vo=libmpv` when they are needed. Built only with
+  `ios-gl` (iOS video variant). Remove when upstream mpv ships an equivalent.

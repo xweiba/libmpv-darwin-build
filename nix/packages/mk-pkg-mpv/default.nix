@@ -49,6 +49,7 @@ let
     patch -p1 <${../../../patches/mpv-fix-missing-objc.patch}
     patch -p1 <${../../../patches/mpv-nested-stream-callback.patch}
     patch -p1 <${../../../patches/mpv-filter-metadata-key-type.patch}
+    patch -p1 <${../../../patches/mpv-vo-avfoundation-embed.patch}
     if [ "${variant}" == "${variants.audio}" ]; then
       patch -p1 <${../../../patches/mpv-remove-libass.patch}
     fi

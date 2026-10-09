@@ -1,0 +1,287 @@
+diff --git a/meson.build b/meson.build
+index f9fe4e7..b6f560c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1379,7 +1379,10 @@ endif
+ ios_gl = cc.has_header_symbol('OpenGLES/ES3/glext.h', 'GL_RGB32F', required: get_option('ios-gl'))
+ features += {'ios-gl': ios_gl}
+ if features['ios-gl']
+-    sources += files('video/out/opengl/hwdec_ios.m')
++    sources += files('video/out/opengl/hwdec_ios.m',
++                     'video/out/vo_avfoundation_embed.m')
++    dependencies += dependency('appleframeworks',
++                               modules: ['AVFoundation', 'CoreMedia', 'CoreVideo'])
+ endif
+ 
+ rpi_mmal_opt = get_option('rpi-mmal').require(
+diff --git a/video/out/vo.c b/video/out/vo.c
+index c53cec3..c7887a7 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -48,6 +48,7 @@
+ #include "osdep/threads.h"
+ 
+ extern const struct vo_driver video_out_mediacodec_embed;
++extern const struct vo_driver video_out_avfoundation_embed;
+ extern const struct vo_driver video_out_x11;
+ extern const struct vo_driver video_out_vdpau;
+ extern const struct vo_driver video_out_xv;
+@@ -74,6 +75,9 @@ static const struct vo_driver *const video_out_drivers[] =
+     &video_out_libmpv,
+ #if HAVE_ANDROID
+     &video_out_mediacodec_embed,
++#endif
++#if HAVE_IOS_GL
++    &video_out_avfoundation_embed,
+ #endif
+     &video_out_gpu,
+ #if HAVE_LIBPLACEBO_NEXT
+diff --git a/video/out/vo_avfoundation_embed.m b/video/out/vo_avfoundation_embed.m
+new file mode 100644
+index 0000000..bd7d197
+--- /dev/null
++++ b/video/out/vo_avfoundation_embed.m
+@@ -0,0 +1,243 @@
++/*
++ * This file is part of mpv.
++ *
++ * mpv is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * mpv is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++// iOS counterpart of vo_mediacodec_embed: decoded frames go straight to an
++// AVSampleBufferDisplayLayer owned by the host (passed as --wid), so the
++// system compositor shows VideoToolbox's YUV buffers without a GL pass.
++// OSD and subtitles are not drawn; the host switches to vo=libmpv for those.
++
++#import <AVFoundation/AVFoundation.h>
++#import <CoreMedia/CoreMedia.h>
++#import <CoreVideo/CoreVideo.h>
++
++#include <libavutil/hwcontext.h>
++
++#include "common/common.h"
++#include "common/msg.h"
++#include "options/options.h"
++#include "vo.h"
++#include "video/hwdec.h"
++#include "video/mp_image.h"
++
++struct priv {
++    AVSampleBufferDisplayLayer *layer;   // host-owned, retained here
++    struct mp_image *next;               // frame to show on flip_page
++    struct mp_hwdec_ctx hwctx;
++    CVPixelBufferPoolRef pool;           // software frames are copied into it
++    struct mp_image_params params;
++};
++
++static int preinit(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    if (vo->opts->WinID == 0 || vo->opts->WinID == -1) {
++        MP_ERR(vo, "--wid must be an AVSampleBufferDisplayLayer.\n");
++        return -1;
++    }
++    id layer = (__bridge id)(void *)(intptr_t)vo->opts->WinID;
++    if (![layer isKindOfClass:[AVSampleBufferDisplayLayer class]]) {
++        MP_ERR(vo, "--wid is not an AVSampleBufferDisplayLayer.\n");
++        return -1;
++    }
++    p->layer = layer;
++    CFRetain((__bridge CFTypeRef)p->layer);
++
++    // Register a VideoToolbox device so the decoder hands over its
++    // CVPixelBuffers (IMGFMT_VIDEOTOOLBOX) instead of copying them back.
++    vo->hwdec_devs = hwdec_devices_create();
++    AVBufferRef *ref = NULL;
++    if (av_hwdevice_ctx_create(&ref, AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
++                               NULL, NULL, 0) >= 0)
++    {
++        p->hwctx = (struct mp_hwdec_ctx){
++            .driver_name = "videotoolbox",
++            .av_device_ref = ref,
++            .hw_imgfmt = IMGFMT_VIDEOTOOLBOX,
++        };
++        hwdec_devices_add(vo->hwdec_devs, &p->hwctx);
++    } else {
++        MP_WARN(vo, "VideoToolbox device unavailable; software frames only.\n");
++    }
++    return 0;
++}
++
++static int query_format(struct vo *vo, int format)
++{
++    return format == IMGFMT_VIDEOTOOLBOX || format == IMGFMT_NV12 ||
++           format == IMGFMT_420P;
++}
++
++static OSType cv_format(int imgfmt)
++{
++    return imgfmt == IMGFMT_NV12 ? kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
++                                 : kCVPixelFormatType_420YpCbCr8Planar;
++}
++
++static int reconfig(struct vo *vo, struct mp_image_params *params)
++{
++    struct priv *p = vo->priv;
++    p->params = *params;
++    if (p->pool) {
++        CVPixelBufferPoolRelease(p->pool);
++        p->pool = NULL;
++    }
++    if (params->imgfmt == IMGFMT_NV12 || params->imgfmt == IMGFMT_420P) {
++        NSDictionary *attrs = @{
++            (id)kCVPixelBufferPixelFormatTypeKey: @(cv_format(params->imgfmt)),
++            (id)kCVPixelBufferWidthKey: @(params->w),
++            (id)kCVPixelBufferHeightKey: @(params->h),
++            (id)kCVPixelBufferIOSurfacePropertiesKey: @{},
++        };
++        if (CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs,
++                                    &p->pool) != kCVReturnSuccess)
++        {
++            MP_ERR(vo, "Could not create a pixel buffer pool.\n");
++            return -1;
++        }
++    }
++    return 0;
++}
++
++// Copies a software frame into a pooled CVPixelBuffer (CPU only, no GPU).
++static CVPixelBufferRef copy_to_buffer(struct priv *p, struct mp_image *mpi)
++{
++    CVPixelBufferRef buf = NULL;
++    if (!p->pool ||
++        CVPixelBufferPoolCreatePixelBuffer(NULL, p->pool, &buf) != kCVReturnSuccess)
++        return NULL;
++    CVPixelBufferLockBaseAddress(buf, 0);
++    for (int n = 0; n < mpi->num_planes; n++) {
++        uint8_t *dst = CVPixelBufferGetBaseAddressOfPlane(buf, n);
++        size_t dst_stride = CVPixelBufferGetBytesPerRowOfPlane(buf, n);
++        int h = mp_image_plane_h(mpi, n);
++        int bytes = (mp_image_plane_w(mpi, n) * mpi->fmt.bpp[n] + 7) / 8;
++        for (int y = 0; y < h; y++)
++            memcpy(dst + y * dst_stride, mpi->planes[n] + y * mpi->stride[n], bytes);
++    }
++    CVPixelBufferUnlockBaseAddress(buf, 0);
++    // Software frames carry no colorimetry; VideoToolbox buffers already do.
++    CFStringRef matrix = mpi->params.color.space == MP_CSP_BT_709
++        ? kCVImageBufferYCbCrMatrix_ITU_R_709_2
++        : kCVImageBufferYCbCrMatrix_ITU_R_601_4;
++    CVBufferSetAttachment(buf, kCVImageBufferYCbCrMatrixKey, matrix,
++                          kCVAttachmentMode_ShouldPropagate);
++    return buf;
++}
++
++static void enqueue(struct vo *vo, CVPixelBufferRef buf)
++{
++    struct priv *p = vo->priv;
++    CMVideoFormatDescriptionRef desc = NULL;
++    if (CMVideoFormatDescriptionCreateForImageBuffer(NULL, buf, &desc) != noErr)
++        return;
++    CMSampleTimingInfo timing = {
++        .duration = kCMTimeInvalid,
++        .presentationTimeStamp = kCMTimeInvalid,
++        .decodeTimeStamp = kCMTimeInvalid,
++    };
++    CMSampleBufferRef sample = NULL;
++    OSStatus err = CMSampleBufferCreateReadyWithImageBuffer(NULL, buf, desc,
++                                                            &timing, &sample);
++    CFRelease(desc);
++    if (err != noErr || !sample)
++        return;
++    // mpv already flips at the right time (audio clock): show it now.
++    CFArrayRef list = CMSampleBufferGetSampleAttachmentsArray(sample, true);
++    if (list && CFArrayGetCount(list) > 0) {
++        CFMutableDictionaryRef dict =
++            (CFMutableDictionaryRef)CFArrayGetValueAtIndex(list, 0);
++        CFDictionarySetValue(dict, kCMSampleAttachmentKey_DisplayImmediately,
++                             kCFBooleanTrue);
++    }
++    // A failed layer (e.g. after the app was backgrounded) stays failed
++    // until flushed.
++    if (p->layer.status == AVQueuedSampleBufferRenderingStatusFailed)
++        [p->layer flush];
++    [p->layer enqueueSampleBuffer:sample];
++    CFRelease(sample);
++}
++
++static void draw_frame(struct vo *vo, struct vo_frame *frame)
++{
++    struct priv *p = vo->priv;
++    if (!frame->current || frame->redraw || frame->repeat)
++        return;
++    mp_image_unrefp(&p->next);
++    p->next = mp_image_new_ref(frame->current);
++}
++
++static void flip_page(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    struct mp_image *mpi = p->next;
++    if (!mpi)
++        return;
++    p->next = NULL;
++    if (mpi->imgfmt == IMGFMT_VIDEOTOOLBOX) {
++        enqueue(vo, (CVPixelBufferRef)mpi->planes[3]);
++    } else {
++        CVPixelBufferRef buf = copy_to_buffer(p, mpi);
++        if (buf) {
++            enqueue(vo, buf);
++            CVPixelBufferRelease(buf);
++        }
++    }
++    // vo.c keeps its own reference to the current frame for screenshots.
++    talloc_free(mpi);
++}
++
++static int control(struct vo *vo, uint32_t request, void *data)
++{
++    struct priv *p = vo->priv;
++    switch (request) {
++    case VOCTRL_RESET:
++        mp_image_unrefp(&p->next);
++        return VO_TRUE;
++    }
++    return VO_NOTIMPL;
++}
++
++static void uninit(struct vo *vo)
++{
++    struct priv *p = vo->priv;
++    mp_image_unrefp(&p->next);
++    if (p->pool)
++        CVPixelBufferPoolRelease(p->pool);
++    if (p->layer) {
++        [p->layer flushAndRemoveImage];
++        CFRelease((__bridge CFTypeRef)p->layer);
++        p->layer = nil;
++    }
++    if (p->hwctx.av_device_ref) {
++        hwdec_devices_remove(vo->hwdec_devs, &p->hwctx);
++        av_buffer_unref(&p->hwctx.av_device_ref);
++    }
++    hwdec_devices_destroy(vo->hwdec_devs);
++}
++
++const struct vo_driver video_out_avfoundation_embed = {
++    .description = "iOS (Embedded AVSampleBufferDisplayLayer)",
++    .name = "avfoundation_embed",
++    .preinit = preinit,
++    .query_format = query_format,
++    .control = control,
++    .draw_frame = draw_frame,
++    .flip_page = flip_page,
++    .reconfig = reconfig,
++    .uninit = uninit,
++    .priv_size = sizeof(struct priv),
++};
