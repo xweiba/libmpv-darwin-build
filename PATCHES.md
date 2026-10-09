@@ -71,5 +71,7 @@ stereo-sidechain playback against each packaged native library before adoption.
   wrapped as display-immediately sample buffers and composited by the system
   without mpv's GL pass or a Flutter texture. NV12/yuv420p software frames are
   copied into a CVPixelBuffer pool (CPU only). OSD and subtitles are not drawn:
-  the host switches back to `vo=libmpv` when they are needed. Built only with
+  the host switches back to `vo=libmpv` when they are needed. `--wid` may also
+  be a host object answering `-mpvDisplayLayers` (NSArray of layers) to show
+  the same buffer on several layers (visible + hidden system PiP source). Built only with
   `ios-gl` (iOS video variant). Remove when upstream mpv ships an equivalent.

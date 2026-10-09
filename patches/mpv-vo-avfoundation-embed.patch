@@ -38,10 +38,10 @@ index c53cec3..c7887a7 100644
  #if HAVE_LIBPLACEBO_NEXT
 diff --git a/video/out/vo_avfoundation_embed.m b/video/out/vo_avfoundation_embed.m
 new file mode 100644
-index 0000000..bd7d197
+index 0000000..79e392e
 --- /dev/null
 +++ b/video/out/vo_avfoundation_embed.m
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,268 @@
 +/*
 + * This file is part of mpv.
 + *
@@ -63,6 +63,11 @@ index 0000000..bd7d197
 +// AVSampleBufferDisplayLayer owned by the host (passed as --wid), so the
 +// system compositor shows VideoToolbox's YUV buffers without a GL pass.
 +// OSD and subtitles are not drawn; the host switches to vo=libmpv for those.
++//
++// --wid may also be a host object answering -mpvDisplayLayers (an NSArray of
++// AVSampleBufferDisplayLayer, read every frame): the same decoded buffer is
++// then shown on each, e.g. the visible layer plus a hidden one feeding system
++// picture-in-picture, without copying pixels.
 +
 +#import <AVFoundation/AVFoundation.h>
 +#import <CoreMedia/CoreMedia.h>
@@ -78,7 +83,7 @@ index 0000000..bd7d197
 +#include "video/mp_image.h"
 +
 +struct priv {
-+    AVSampleBufferDisplayLayer *layer;   // host-owned, retained here
++    id target;                           // layer or layer provider, retained
 +    struct mp_image *next;               // frame to show on flip_page
 +    struct mp_hwdec_ctx hwctx;
 +    CVPixelBufferPoolRef pool;           // software frames are copied into it
@@ -92,13 +97,15 @@ index 0000000..bd7d197
 +        MP_ERR(vo, "--wid must be an AVSampleBufferDisplayLayer.\n");
 +        return -1;
 +    }
-+    id layer = (__bridge id)(void *)(intptr_t)vo->opts->WinID;
-+    if (![layer isKindOfClass:[AVSampleBufferDisplayLayer class]]) {
++    id target = (__bridge id)(void *)(intptr_t)vo->opts->WinID;
++    if (![target isKindOfClass:[AVSampleBufferDisplayLayer class]] &&
++        ![target respondsToSelector:@selector(mpvDisplayLayers)])
++    {
 +        MP_ERR(vo, "--wid is not an AVSampleBufferDisplayLayer.\n");
 +        return -1;
 +    }
-+    p->layer = layer;
-+    CFRetain((__bridge CFTypeRef)p->layer);
++    p->target = target;
++    CFRetain((__bridge CFTypeRef)p->target);
 +
 +    // Register a VideoToolbox device so the decoder hands over its
 +    // CVPixelBuffers (IMGFMT_VIDEOTOOLBOX) instead of copying them back.
@@ -182,9 +189,15 @@ index 0000000..bd7d197
 +    return buf;
 +}
 +
-+static void enqueue(struct vo *vo, CVPixelBufferRef buf)
++static NSArray *target_layers(struct priv *p)
 +{
-+    struct priv *p = vo->priv;
++    if ([p->target isKindOfClass:[AVSampleBufferDisplayLayer class]])
++        return @[p->target];
++    return [p->target performSelector:@selector(mpvDisplayLayers)];
++}
++
++static void enqueue_layer(AVSampleBufferDisplayLayer *layer, CVPixelBufferRef buf)
++{
 +    CMVideoFormatDescriptionRef desc = NULL;
 +    if (CMVideoFormatDescriptionCreateForImageBuffer(NULL, buf, &desc) != noErr)
 +        return;
@@ -209,10 +222,19 @@ index 0000000..bd7d197
 +    }
 +    // A failed layer (e.g. after the app was backgrounded) stays failed
 +    // until flushed.
-+    if (p->layer.status == AVQueuedSampleBufferRenderingStatusFailed)
-+        [p->layer flush];
-+    [p->layer enqueueSampleBuffer:sample];
++    if (layer.status == AVQueuedSampleBufferRenderingStatusFailed)
++        [layer flush];
++    [layer enqueueSampleBuffer:sample];
 +    CFRelease(sample);
++}
++
++static void enqueue(struct vo *vo, CVPixelBufferRef buf)
++{
++    struct priv *p = vo->priv;
++    @autoreleasepool {
++        for (AVSampleBufferDisplayLayer *layer in target_layers(p))
++            enqueue_layer(layer, buf);
++    }
 +}
 +
 +static void draw_frame(struct vo *vo, struct vo_frame *frame)
@@ -261,10 +283,13 @@ index 0000000..bd7d197
 +    mp_image_unrefp(&p->next);
 +    if (p->pool)
 +        CVPixelBufferPoolRelease(p->pool);
-+    if (p->layer) {
-+        [p->layer flushAndRemoveImage];
-+        CFRelease((__bridge CFTypeRef)p->layer);
-+        p->layer = nil;
++    if (p->target) {
++        @autoreleasepool {
++            for (AVSampleBufferDisplayLayer *layer in target_layers(p))
++                [layer flushAndRemoveImage];
++        }
++        CFRelease((__bridge CFTypeRef)p->target);
++        p->target = nil;
 +    }
 +    if (p->hwctx.av_device_ref) {
 +        hwdec_devices_remove(vo->hwdec_devs, &p->hwctx);
